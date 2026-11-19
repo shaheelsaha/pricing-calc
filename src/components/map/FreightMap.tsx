@@ -275,12 +275,15 @@ export default function FreightMap({
           markers.forEach(m => addMarker(G, map, m, false, m.id === highlightedMarkerId));
         });
         // Fit map
-        const lngs = markers.map(m => m.longitude);
-        const lats  = markers.map(m => m.latitude);
-        map.fitBounds(
-          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-          { padding: 100, duration: 1000 }
-        );
+        const validM = markers.filter(m => isFinite(m.longitude) && isFinite(m.latitude));
+        if (validM.length >= 2) {
+          const lngs = validM.map(m => m.longitude);
+          const lats  = validM.map(m => m.latitude);
+          map.fitBounds(
+            [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+            { padding: 100, duration: 1000 }
+          );
+        }
       };
       if (map.isStyleLoaded()) run(); else map.once('styledata', run);
       return;
@@ -299,18 +302,22 @@ export default function FreightMap({
       const result: number[][] = [fullCoords[0]];
 
       for (let i = 1; i < fullCoords.length; i++) {
-        const [x0, y0] = fullCoords[i - 1];
-        const [x1, y1] = fullCoords[i];
-        const segKm = Math.sqrt((x1-x0)**2 + (y1-y0)**2) * 111.32; // rough deg→km
+        const c0 = fullCoords[i - 1], c1 = fullCoords[i];
+        if (!c0 || !c1) continue;
+        const [x0, y0] = c0, [x1, y1] = c1;
+        if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) continue;
+        const segKm = Math.sqrt((x1-x0)**2 + (y1-y0)**2) * 111.32;
+        // Skip zero-length segments to avoid NaN from 0/0
+        if (segKm < 0.0001) { result.push(c1); continue; }
         const next = accum + segKm;
 
         if (next >= km) {
           // Interpolate within this segment
-          const frac = (km - accum) / segKm;
+          const frac = Math.max(0, Math.min(1, (km - accum) / segKm));
           result.push([x0 + (x1-x0)*frac, y0 + (y1-y0)*frac]);
           break;
         }
-        result.push(fullCoords[i]);
+        result.push(c1);
         accum = next;
       }
       return result;
@@ -373,12 +380,15 @@ export default function FreightMap({
                 revealedRef.current.add(m.id);
               }
             });
-            const lngs = markers.map(m => m.longitude);
-            const lats  = markers.map(m => m.latitude);
-            map.fitBounds(
-              [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-              { padding: 110, duration: 1200 }
-            );
+            const validMarkers = markers.filter(m => isFinite(m.longitude) && isFinite(m.latitude));
+            if (validMarkers.length >= 2) {
+              const lngs = validMarkers.map(m => m.longitude);
+              const lats  = validMarkers.map(m => m.latitude);
+              map.fitBounds(
+                [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+                { padding: 110, duration: 1200 }
+              );
+            }
             onAnimationComplete();
           }
         };

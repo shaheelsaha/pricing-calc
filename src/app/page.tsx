@@ -180,8 +180,10 @@ function NewQuotationView() {
           const [x0, y0] = c0, [x1, y1] = c1;
           if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) continue;
           const seg = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) * 111.32;
+          // Skip zero-length segments (identical coord pairs) to avoid NaN
+          if (seg < 0.0001) continue;
           if (accum + seg >= km) {
-            const t2 = seg > 0 ? (km - accum) / seg : 0;
+            const t2 = Math.max(0, Math.min(1, (km - accum) / seg));
             lng = x0 + (x1 - x0) * t2;
             lat = y0 + (y1 - y0) * t2;
             break;
