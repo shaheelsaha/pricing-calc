@@ -53,23 +53,24 @@ function kmsAlongRoute(
   targetLng: number,
   targetLat: number,
 ): number {
-  // Find nearest point on the polyline and return accumulated km to it
+  if (!coords || coords.length < 2) return 0;
   let best = Infinity;
   let bestKm = 0;
   let accum = 0;
 
   for (let i = 1; i < coords.length; i++) {
-    const [x0, y0] = coords[i - 1];
-    const [x1, y1] = coords[i];
-    const segKm = Math.sqrt((x1-x0)**2 + (y1-y0)**2) * 111.32;
+    const c0 = coords[i - 1], c1 = coords[i];
+    if (!c0 || !c1 || c0.length < 2 || c1.length < 2) continue;
+    const [x0, y0] = c0, [x1, y1] = c1;
+    if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) continue;
 
-    // Project point onto segment
+    const segKm = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) * 111.32;
     const dx = x1 - x0, dy = y1 - y0;
-    const lenSq = dx*dx + dy*dy;
-    let t = lenSq > 0 ? ((targetLng-x0)*dx + (targetLat-y0)*dy) / lenSq : 0;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((targetLng - x0) * dx + (targetLat - y0) * dy) / lenSq : 0;
     t = Math.max(0, Math.min(1, t));
-    const px = x0 + t*dx, py = y0 + t*dy;
-    const dist = Math.sqrt((targetLng-px)**2 + (targetLat-py)**2);
+    const px = x0 + t * dx, py = y0 + t * dy;
+    const dist = Math.sqrt((targetLng - px) ** 2 + (targetLat - py) ** 2);
 
     if (dist < best) {
       best = dist;
@@ -77,7 +78,7 @@ function kmsAlongRoute(
     }
     accum += segKm;
   }
-  return bestKm;
+  return isFinite(bestKm) ? bestKm : 0;
 }
 
 /* ─── New Quotation view ─────────────────────────────────────────────────── */
@@ -166,23 +167,38 @@ function NewQuotationView() {
       if (idx >= tollFractions.length) return;
       const frac = tollFractions[idx];
       const km = totalKm * frac;
-      // Find coord at that km
+
+      // Walk the route coords to find the exact interpolated point
       let accum = 0;
       let lng = origin.longitude + (destination.longitude - origin.longitude) * frac;
       let lat = origin.latitude  + (destination.latitude  - origin.latitude)  * frac;
-      for (let i = 1; i < routeCoords.length; i++) {
-        const [x0,y0] = routeCoords[i-1], [x1,y1] = routeCoords[i];
-        const seg = Math.sqrt((x1-x0)**2+(y1-y0)**2)*111.32;
-        if (accum + seg >= km) {
-          const t2 = (km - accum) / seg;
-          lng = x0 + (x1-x0)*t2; lat = y0 + (y1-y0)*t2;
-          break;
+
+      if (routeCoords.length >= 2) {
+        for (let i = 1; i < routeCoords.length; i++) {
+          const c0 = routeCoords[i - 1], c1 = routeCoords[i];
+          if (!c0 || !c1 || c0.length < 2 || c1.length < 2) continue;
+          const [x0, y0] = c0, [x1, y1] = c1;
+          if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) continue;
+          const seg = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2) * 111.32;
+          if (accum + seg >= km) {
+            const t2 = seg > 0 ? (km - accum) / seg : 0;
+            lng = x0 + (x1 - x0) * t2;
+            lat = y0 + (y1 - y0) * t2;
+            break;
+          }
+          accum += seg;
         }
-        accum += seg;
       }
+
+      // Safety guard — fall back to straight-line interpolation
+      if (!isFinite(lng) || !isFinite(lat)) {
+        lng = origin.longitude + (destination.longitude - origin.longitude) * frac;
+        lat = origin.latitude  + (destination.latitude  - origin.latitude)  * frac;
+      }
+
       const id = `toll-${idx}`;
       map.set(id, {
-        id, locationName: item.locationName || `Toll Gate ${idx+1}`,
+        id, locationName: item.locationName || `Toll Gate ${idx + 1}`,
         longitude: lng, latitude: lat,
         color: 'purple', chargeItems: [item],
         routeDistanceKm: km,

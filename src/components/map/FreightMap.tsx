@@ -185,7 +185,10 @@ export default function FreightMap({
     }).setHTML(buildPopupHTML(marker, color));
 
     const mapMarker = new MapboxGL.Marker({ element: el, anchor: 'bottom' })
-      .setLngLat([marker.longitude, marker.latitude])
+      .setLngLat([
+        isFinite(marker.longitude) ? marker.longitude : 55.27,
+        isFinite(marker.latitude)  ? marker.latitude  : 25.20,
+      ])
       .setPopup(popup)
       .addTo(map);
 
@@ -346,6 +349,11 @@ export default function FreightMap({
           for (const marker of sorted) {
             const dist = marker.routeDistanceKm ?? 0;
             if (dist <= currentKm && !revealedRef.current.has(marker.id)) {
+              // Skip markers with invalid coordinates
+              if (!isFinite(marker.longitude) || !isFinite(marker.latitude)) {
+                revealedRef.current.add(marker.id);
+                continue;
+              }
               revealedRef.current.add(marker.id);
               addMarker(G, map, marker, true, false);
               onMarkerRevealed(marker.id);
