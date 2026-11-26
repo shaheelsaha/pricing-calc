@@ -13,7 +13,7 @@ import {
 import { UAE_LOCATIONS } from '@/constants/locations';
 import { getRoute } from '@/lib/mapbox/directions';
 import { calculatePricing, applyMarkup } from '@/lib/pricing/engine';
-import { DEMO_RATES, DEMO_TOLL_ITEMS } from '@/lib/pricing/demo-rates';
+import { DEMO_RATES } from '@/lib/pricing/demo-rates';
 
 const FreightMap = dynamic(() => import('@/components/map/FreightMap'), {
   ssr: false,
@@ -127,19 +127,29 @@ function NewQuotationView() {
     const map = new Map<string, MapMarker>();
     const markerItems = new Map<string, QuotationItem[]>();
 
+    // Charge items at origin
+    const originItems = items.filter(
+      i => (i.locationId === origin.locationId || !i.locationId) &&
+           i.chargeCategory !== 'delivery' &&
+           i.chargeCategory !== 'toll'
+    );
+
     // Origin
     map.set('origin', {
       id: 'origin', locationId: origin.locationId,
       locationName: `${origin.name}\n(Origin)`,
       longitude: origin.longitude, latitude: origin.latitude,
-      color: 'green', chargeItems: [], isOrigin: true,
+      color: 'orange', chargeItems: originItems, isOrigin: true,
       routeDistanceKm: 0,
     });
-    markerItems.set('origin', []);
+    markerItems.set('origin', originItems);
 
-    // Charge markers (non-toll, non-delivery)
+    // Intermediate charge markers (not origin, not delivery, not toll)
     for (const item of items) {
-      if (!item.locationId || item.chargeCategory === 'delivery' || item.chargeCategory === 'toll') continue;
+      if (!item.locationId ||
+          item.locationId === origin.locationId ||
+          item.chargeCategory === 'delivery' ||
+          item.chargeCategory === 'toll') continue;
       const loc = locations.find(l => l.locationId === item.locationId);
       if (!loc) continue;
       const existing = map.get(item.locationId);
@@ -252,8 +262,7 @@ function NewQuotationView() {
         externalFreightCarrier: externalCarrier,
       });
 
-      let items = result.items;
-      if (mode === 'land' && routeInfo) items = [...items, ...DEMO_TOLL_ITEMS];
+      const items = result.items;
 
       setAllItems(items);
       setWarnings(result.warnings);

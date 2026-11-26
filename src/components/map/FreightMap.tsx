@@ -33,36 +33,48 @@ function easeOut(t: number) { return 1 - Math.pow(1 - t, 1.6); }
 
 function buildPopupHTML(marker: MapMarker, accentColor: string): string {
   const hasCharges = marker.chargeItems.length > 0;
+  const isMulti = marker.chargeItems.length > 1;
+  const sub = marker.chargeItems.reduce((s, i) => s + i.total, 0);
+
   let html = `
-    <div style="padding:12px 14px;font-family:-apple-system,sans-serif;min-width:200px;max-width:260px;">
-      <div style="font-weight:700;font-size:13px;color:#1e293b;margin-bottom:8px;
-                  padding-bottom:6px;border-bottom:2.5px solid ${accentColor};">
-        ${marker.locationName.replace(/\n/g, ' ')}
+    <div style="padding:7px 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-width:125px;max-width:175px;">
+      <div style="font-weight:700;font-size:11px;color:#0f172a;line-height:1.2;margin-bottom:3px;
+                  padding-bottom:3px;border-bottom:1.5px solid ${accentColor};display:flex;align-items:center;justify-content:space-between;gap:6px;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${marker.locationName.replace(/\n/g, ' ')}</span>
+        ${!isMulti && hasCharges ? `<span style="font-size:11px;font-weight:800;color:${accentColor};white-space:nowrap;">AED ${sub.toLocaleString('en-US',{minimumFractionDigits:2})}</span>` : ''}
       </div>`;
+
   if (hasCharges) {
-    html += marker.chargeItems.map(item => `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;
-                  padding:5px 0;border-top:1px solid #f1f5f9;">
-        <div>
-          <div style="font-size:12px;color:#374151;">${item.chargeName}</div>
-          <div style="font-size:10px;color:#9ca3af;">${item.unit.replace(/_/g,' ')}</div>
-        </div>
-        <div style="font-size:12px;font-weight:700;color:#1e293b;margin-left:12px;white-space:nowrap;">
-          ${item.currency} ${item.total.toLocaleString('en-US',{minimumFractionDigits:2})}
-        </div>
-      </div>`).join('');
-    const sub = marker.chargeItems.reduce((s, i) => s + i.total, 0);
-    html += `
-      <div style="margin-top:8px;padding-top:6px;border-top:2px solid ${accentColor};
-                  display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:11px;color:#6b7280;font-weight:600;">Subtotal</span>
-        <span style="font-size:14px;font-weight:800;color:${accentColor};">
-          AED ${sub.toLocaleString('en-US',{minimumFractionDigits:2})}
-        </span>
-      </div>`;
+    if (isMulti) {
+      html += marker.chargeItems.map(item => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:1.5px 0;font-size:9.5px;">
+          <span style="color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px;" title="${item.chargeName}">
+            ${item.chargeName}
+          </span>
+          <span style="font-weight:700;color:#0f172a;margin-left:4px;white-space:nowrap;">
+            ${item.total.toLocaleString('en-US',{minimumFractionDigits:2})}
+          </span>
+        </div>`).join('');
+
+      html += `
+        <div style="margin-top:3px;padding-top:3px;border-top:1px dashed #cbd5e1;
+                    display:flex;justify-content:space-between;align-items:center;font-size:9.5px;">
+          <span style="color:#64748b;font-weight:600;">Total</span>
+          <span style="font-size:11px;font-weight:800;color:${accentColor};">
+            AED ${sub.toLocaleString('en-US',{minimumFractionDigits:2})}
+          </span>
+        </div>`;
+    } else {
+      const item = marker.chargeItems[0];
+      html += `
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:9.5px;color:#64748b;padding-top:1px;">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:95px;">${item.chargeName}</span>
+          <span style="white-space:nowrap;">${item.unit.replace(/_/g, ' ')}</span>
+        </div>`;
+    }
   } else {
-    html += `<div style="font-size:12px;color:#9ca3af;text-align:center;padding:6px 0;">
-      ${marker.isOrigin ? 'Journey starts here' : 'Final destination'}
+    html += `<div style="font-size:9.5px;color:#64748b;text-align:center;padding:1px 0;">
+      ${marker.isOrigin ? 'Origin' : 'Final Destination'}
     </div>`;
   }
   html += `</div>`;
@@ -81,6 +93,9 @@ export default function FreightMap({
   const containerRef  = useRef<HTMLDivElement>(null);
   const mapRef        = useRef<unknown>(null);
   const markerEls     = useRef<Map<string, { mapMarker: unknown; popup: unknown }>>(new Map());
+  const activePopupRef = useRef<unknown>(null);
+  const hasCompletedAnimRef = useRef(false);
+  const lastRouteKeyRef = useRef<string | null>(null);
   const rafRef        = useRef<number | null>(null);
   const revealedRef   = useRef<Set<string>>(new Set());
 
@@ -132,78 +147,115 @@ export default function FreightMap({
     const color = COLORS[marker.color] || '#2563eb';
 
     const el = document.createElement('div');
+    el.className = 'freight-marker-root';
     el.style.cssText = `
-      position:relative;
-      width:${highlighted?46:38}px; height:${highlighted?46:38}px;
+      width:${highlighted ? 34 : 28}px; height:${highlighted ? 34 : 28}px;
       cursor:pointer;
-      animation: markerDrop 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
     `;
+
+    const inner = document.createElement('div');
+    inner.style.cssText = `
+      position:relative;
+      width:100%;
+      height:100%;
+      animation: markerDrop 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
+    `;
+    el.appendChild(inner);
 
     // Pulse ring
     const ring = document.createElement('div');
     ring.style.cssText = `
-      position:absolute;inset:-7px;border-radius:50%;
-      border:2.5px solid ${color};opacity:0;
-      animation:pulseRing 1.6s ease-out ${autoOpenPopup ? 'infinite' : '1'};
+      position:absolute;inset:-5px;border-radius:50%;
+      border:2px solid ${color};opacity:0;
+      animation:pulseRing 1.5s ease-out ${autoOpenPopup ? 'infinite' : '1'};
     `;
-    el.appendChild(ring);
+    inner.appendChild(ring);
 
     const pin = document.createElement('div');
     pin.style.cssText = `
       width:100%;height:100%;background:${color};
       border-radius:50% 50% 50% 0;transform:rotate(-45deg);
-      border:3px solid white;
-      box-shadow:0 3px 12px rgba(0,0,0,0.45);
+      border:2.5px solid white;
+      box-shadow:0 2px 8px rgba(0,0,0,0.35);
       display:flex;align-items:center;justify-content:center;
     `;
     const icon = document.createElement('div');
-    icon.style.cssText = `transform:rotate(45deg);font-size:${highlighted?17:14}px;line-height:1;`;
+    icon.style.cssText = `transform:rotate(45deg);font-size:${highlighted ? 13 : 11}px;line-height:1;`;
     icon.textContent = EMOJI[marker.color] || '📍';
     pin.appendChild(icon);
-    el.appendChild(pin);
+    inner.appendChild(pin);
 
     // Always-visible label for origin / dest
     if (marker.isOrigin || marker.isDestination) {
       const lbl = document.createElement('div');
       const lines = marker.locationName.split('\n');
       lbl.style.cssText = `
-        position:absolute;bottom:112%;left:50%;transform:translateX(-50%);
-        background:white;border:2px solid ${color};
-        border-radius:8px;padding:4px 10px;white-space:nowrap;
-        box-shadow:0 2px 8px rgba(0,0,0,0.2);pointer-events:none;
+        position:absolute;bottom:108%;left:50%;transform:translateX(-50%);
+        background:rgba(255,255,255,0.96);border:1.5px solid ${color};
+        border-radius:5px;padding:2px 7px;white-space:nowrap;
+        box-shadow:0 2px 6px rgba(0,0,0,0.22);pointer-events:none;
         animation:fadeUp 0.35s ease both;
       `;
       lbl.innerHTML = lines.map((l, i) =>
-        `<div style="text-align:center;font-size:${i===0?12:10}px;
-         font-weight:${i===0?700:500};color:${i===0?'#1e293b':'#64748b'}">${l}</div>`
+        `<div style="text-align:center;font-size:${i===0?10.5:9}px;
+         font-weight:${i===0?700:500};color:${i===0?'#1e293b':'#64748b'};line-height:1.2;">${l}</div>`
       ).join('');
-      el.appendChild(lbl);
+      inner.appendChild(lbl);
     }
 
+    const lng = isFinite(marker.longitude) ? marker.longitude : 55.27;
+    const lat = isFinite(marker.latitude)  ? marker.latitude  : 25.20;
+
     const popup = new MapboxGL.Popup({
-      offset: 30, closeButton: true, maxWidth: '280px', closeOnClick: false,
-    }).setHTML(buildPopupHTML(marker, color));
+      offset: 18, closeButton: true, maxWidth: '185px', closeOnClick: false,
+    })
+      .setLngLat([lng, lat])
+      .setHTML(buildPopupHTML(marker, color));
+
+    popup.on('close', () => {
+      if (activePopupRef.current === popup) {
+        activePopupRef.current = null;
+      }
+    });
 
     const mapMarker = new MapboxGL.Marker({ element: el, anchor: 'bottom' })
-      .setLngLat([
-        isFinite(marker.longitude) ? marker.longitude : 55.27,
-        isFinite(marker.latitude)  ? marker.latitude  : 25.20,
-      ])
+      .setLngLat([lng, lat])
       .setPopup(popup)
       .addTo(map);
 
     if (autoOpenPopup && marker.chargeItems.length > 0) {
-      setTimeout(() => { try { mapMarker.getPopup().addTo(map); } catch { /* noop */ } }, 350);
+      // Close previous popup so they don't stack / clump over each other
+      if (activePopupRef.current) {
+        try { (activePopupRef.current as { remove: () => void }).remove(); } catch { /* noop */ }
+      }
+      setTimeout(() => {
+        try {
+          popup.addTo(map);
+          activePopupRef.current = popup;
+        } catch { /* noop */ }
+      }, 200);
     }
 
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
       onMarkerClick(marker.id);
+      if (activePopupRef.current && activePopupRef.current !== popup) {
+        try { (activePopupRef.current as { remove: () => void }).remove(); } catch { /* noop */ }
+      }
+      try {
+        popup.addTo(map);
+        activePopupRef.current = popup;
+      } catch { /* noop */ }
     });
 
     markerEls.current.set(marker.id, { mapMarker, popup });
   }
 
   function removeAllMarkers() {
+    if (activePopupRef.current) {
+      try { (activePopupRef.current as { remove: () => void }).remove(); } catch { /* noop */ }
+      activePopupRef.current = null;
+    }
     markerEls.current.forEach(({ mapMarker, popup }) => {
       try { (popup as { remove: () => void }).remove(); } catch { /* noop */ }
       try { (mapMarker as { remove: () => void }).remove(); } catch { /* noop */ }
@@ -216,6 +268,18 @@ export default function FreightMap({
     if (!mapLoaded || !mapRef.current || !route || markers.length === 0) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const map = mapRef.current as any;
+
+    const routeKey = `${route.distance}-${markers.map(m=>m.id).join(',')}`;
+    const routeChanged = routeKey !== lastRouteKeyRef.current;
+    if (routeChanged) {
+      lastRouteKeyRef.current = routeKey;
+      hasCompletedAnimRef.current = false;
+    }
+
+    // If animation has completed and isAnimating is now false, don't tear down the map!
+    if (!isAnimating && hasCompletedAnimRef.current) {
+      return;
+    }
 
     // Cancel any running animation
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -273,6 +337,17 @@ export default function FreightMap({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const G = mgl.default as any;
           markers.forEach(m => addMarker(G, map, m, false, m.id === highlightedMarkerId));
+          // Reveal all detail cards on screen
+          setTimeout(() => {
+            markers.forEach(m => {
+              if (m.chargeItems.length > 0) {
+                const entry = markerEls.current.get(m.id);
+                if (entry) {
+                  try { (entry.popup as { addTo: (m: unknown) => void }).addTo(map); } catch { /* noop */ }
+                }
+              }
+            });
+          }, 400);
         });
         // Fit map
         const validM = markers.filter(m => isFinite(m.longitude) && isFinite(m.latitude));
@@ -374,6 +449,8 @@ export default function FreightMap({
           } else {
             // Done — ensure all markers visible + fit bounds
             setAnimBanner(false);
+            hasCompletedAnimRef.current = true;
+
             markers.forEach(m => {
               if (!revealedRef.current.has(m.id)) {
                 addMarker(G, map, m, false, false);
@@ -386,9 +463,25 @@ export default function FreightMap({
               const lats  = validMarkers.map(m => m.latitude);
               map.fitBounds(
                 [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-                { padding: 110, duration: 1200 }
+                { padding: 110, duration: 1000 }
               );
             }
+
+            // Once journey ends, open all detail cards across the screen!
+            activePopupRef.current = null;
+            setTimeout(() => {
+              markers.forEach(m => {
+                if (m.chargeItems.length > 0) {
+                  const entry = markerEls.current.get(m.id);
+                  if (entry) {
+                    try {
+                      (entry.popup as { addTo: (m: unknown) => void }).addTo(map);
+                    } catch { /* noop */ }
+                  }
+                }
+              });
+            }, 300);
+
             onAnimationComplete();
           }
         };
@@ -415,6 +508,13 @@ export default function FreightMap({
     if (entry) {
       const ll = (entry.mapMarker as { getLngLat: () => { lng: number; lat: number } }).getLngLat();
       map.flyTo({ center: [ll.lng, ll.lat], zoom: Math.max(map.getZoom(), 12), duration: 600 });
+      if (activePopupRef.current && activePopupRef.current !== entry.popup) {
+        try { (activePopupRef.current as { remove: () => void }).remove(); } catch { /* noop */ }
+      }
+      try {
+        (entry.popup as { addTo: (m: unknown) => void }).addTo(map);
+        activePopupRef.current = entry.popup;
+      } catch { /* noop */ }
     }
   }, [highlightedMarkerId, mapLoaded]);
 
