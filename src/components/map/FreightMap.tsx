@@ -26,7 +26,10 @@ const EMOJI: Record<string, string> = {
   green: '⚓', orange: '🏭', purple: '🛣️', blue: '🚛', red: '🚩',
 };
 
-const ANIM_DURATION_MS = 7000; // 7 s end-to-end journey
+function getAnimDurationMs(distanceKm: number): number {
+  const km = isFinite(distanceKm) && distanceKm > 0 ? distanceKm : 0;
+  return Math.min(13000, Math.max(4500, 3500 + km * 75));
+}
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 function easeOut(t: number) { return 1 - Math.pow(1 - t, 1.6); }
@@ -37,22 +40,22 @@ function buildPopupHTML(marker: MapMarker, accentColor: string): string {
   const sub = marker.chargeItems.reduce((s, i) => s + i.total, 0);
 
   let html = `
-    <div style="padding:7px 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-width:125px;max-width:175px;">
-      <div style="font-weight:700;font-size:11px;color:#0f172a;line-height:1.2;margin-bottom:3px;
+    <div style="padding:7px 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-width:130px;max-width:185px;">
+      <div style="font-weight:700;font-size:11px;color:#0f172a;line-height:1.2;margin-bottom:3px;padding-right:16px;
                   padding-bottom:3px;border-bottom:1.5px solid ${accentColor};display:flex;align-items:center;justify-content:space-between;gap:6px;">
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${marker.locationName.replace(/\n/g, ' ')}</span>
-        ${!isMulti && hasCharges ? `<span style="font-size:11px;font-weight:800;color:${accentColor};white-space:nowrap;">AED ${sub.toLocaleString('en-US',{minimumFractionDigits:2})}</span>` : ''}
+        ${!isMulti && hasCharges ? `<span style="font-size:11px;font-weight:800;color:${accentColor};white-space:nowrap;">${marker.chargeItems[0].isAtActual && sub === 0 ? 'At Actuals' : `AED ${sub.toLocaleString('en-US',{minimumFractionDigits:2})}`}</span>` : ''}
       </div>`;
 
   if (hasCharges) {
     if (isMulti) {
       html += marker.chargeItems.map(item => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:1.5px 0;font-size:9.5px;">
-          <span style="color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px;" title="${item.chargeName}">
+          <span style="color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:95px;" title="${item.chargeName}">
             ${item.chargeName}
           </span>
           <span style="font-weight:700;color:#0f172a;margin-left:4px;white-space:nowrap;">
-            ${item.total.toLocaleString('en-US',{minimumFractionDigits:2})}
+            ${item.isAtActual && item.total === 0 ? 'At Actuals' : item.total.toLocaleString('en-US',{minimumFractionDigits:2})}
           </span>
         </div>`).join('');
 
@@ -228,12 +231,10 @@ export default function FreightMap({
       if (activePopupRef.current) {
         try { (activePopupRef.current as { remove: () => void }).remove(); } catch { /* noop */ }
       }
-      setTimeout(() => {
-        try {
-          popup.addTo(map);
-          activePopupRef.current = popup;
-        } catch { /* noop */ }
-      }, 200);
+      try {
+        popup.addTo(map);
+        activePopupRef.current = popup;
+      } catch { /* noop */ }
     }
 
     el.addEventListener('click', (e) => {
@@ -398,101 +399,189 @@ export default function FreightMap({
       return result;
     }
 
+    let cancelled = false;
+    let introTimer: ReturnType<typeof setTimeout> | null = null;
+
     const startAnim = () => {
+      if (cancelled) return;
       // Start with just origin point
       setupRouteLayers([fullCoords[0]]);
 
       import('mapbox-gl').then(mgl => {
+        if (cancelled) return;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const G = mgl.default as any;
 
-        // Show origin marker immediately
+        // Compute full-route bounding box so gradual zoom-out frames the entire path
+        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+        for (const pt of fullCoords) {
+          if (pt && pt.length >= 2 && isFinite(pt[0]) && isFinite(pt[1])) {
+            if (pt[0] < minLng) minLng = pt[0];
+            if (pt[0] > maxLng) maxLng = pt[0];
+            if (pt[1] < minLat) minLat = pt[1];
+            if (pt[1] > maxLat) maxLat = pt[1];
+          }
+        }
+        const hasRouteBounds = isFinite(minLng) && isFinite(maxLng) && isFinite(minLat) && isFinite(maxLat);
+
         const origin = sorted[0];
-        if (origin) {
-          addMarker(G, map, origin, true, false);
-          revealedRef.current.add(origin.id);
-          onMarkerRevealed?.(origin.id);
-          // Fly to origin first
-          map.flyTo({ center: [origin.longitude, origin.latitude], zoom: 11, duration: 800 });
+        const startLng = origin && isFinite(origin.longitude) ? origin.longitude : fullCoords[0][0];
+        const startLat = origin && isFinite(origin.latitude) ? origin.latitude : fullCoords[0][1];
+
+        let endLng = startLng;
+        let endLat = startLat;
+        let endZoom = 10;
+
+        if (hasRouteBounds) {
+          const cam = map.cameraForBounds(
+            [[minLng, minLat], [maxLng, maxLat]],
+            { padding: 110 }
+          );
+          if (cam && cam.center && isFinite(cam.zoom)) {
+            const c = cam.center;
+            endLng = typeof c.lng === 'number' ? c.lng : c[0];
+            endLat = typeof c.lat === 'number' ? c.lat : c[1];
+            endZoom = cam.zoom;
+          }
         }
 
-        const startTime = performance.now();
+        const startZoom = Math.min(14.6, Math.max(13.6, endZoom + 3.4));
 
-        const frame = () => {
-          const elapsed = performance.now() - startTime;
-          const t        = Math.min(elapsed / ANIM_DURATION_MS, 1);
-          const progress = easeOut(t);
-          const currentKm = totalKm * progress;
+        // Smoothly zoom in close to the first checkpoint (Port/Terminal), then start checkpoint tour
+        map.flyTo({ center: [startLng, startLat], zoom: startZoom, duration: 950, essential: true });
 
-          // Update route line
-          updateRouteCoords(coordsForKm(currentKm));
+        introTimer = setTimeout(() => {
+          if (cancelled) return;
 
-          // Reveal markers whose position has been passed
-          for (const marker of sorted) {
-            const dist = marker.routeDistanceKm ?? 0;
-            if (dist <= currentKm && !revealedRef.current.has(marker.id)) {
-              // Skip markers with invalid coordinates
-              if (!isFinite(marker.longitude) || !isFinite(marker.latitude)) {
-                revealedRef.current.add(marker.id);
-                continue;
-              }
-              revealedRef.current.add(marker.id);
-              addMarker(G, map, marker, true, false);
-              onMarkerRevealed(marker.id);
-              // Pan camera to follow
-              map.panTo([marker.longitude, marker.latitude], { duration: 600 });
-            }
+          if (origin) {
+            addMarker(G, map, origin, true, false);
+            revealedRef.current.add(origin.id);
+            onMarkerRevealed?.(origin.id);
           }
 
-          if (t < 1) {
-            rafRef.current = requestAnimationFrame(frame);
-          } else {
-            // Done — ensure all markers visible + fit bounds
-            setAnimBanner(false);
-            hasCompletedAnimRef.current = true;
+          const hasPortCheckpoints = sorted.some(m => m.id.startsWith('checkpoint-'));
+          const portEndKm = Math.min(totalKm * 0.25, 2.2);
+          const animDurationMs = getAnimDurationMs(totalKm) + (hasPortCheckpoints ? 3200 : 0);
+          const startTime = performance.now();
 
-            markers.forEach(m => {
-              if (!revealedRef.current.has(m.id)) {
-                addMarker(G, map, m, false, false);
-                revealedRef.current.add(m.id);
+          const frame = () => {
+            if (cancelled) return;
+            const elapsed = performance.now() - startTime;
+            const t        = Math.min(elapsed / animDurationMs, 1);
+
+            // Dedicate first 35% of animation to smoothly touring Port -> DO -> Token -> Exit Gate
+            let currentKm: number;
+            let highwayProgress: number;
+            if (hasPortCheckpoints && totalKm > portEndKm) {
+              if (t <= 0.35) {
+                const portT = t / 0.35;
+                currentKm = portEndKm * portT;
+                highwayProgress = 0;
+              } else {
+                const hwyT = easeOut((t - 0.35) / 0.65);
+                currentKm = portEndKm + (totalKm - portEndKm) * hwyT;
+                highwayProgress = hwyT;
               }
-            });
-            const validMarkers = markers.filter(m => isFinite(m.longitude) && isFinite(m.latitude));
-            if (validMarkers.length >= 2) {
-              const lngs = validMarkers.map(m => m.longitude);
-              const lats  = validMarkers.map(m => m.latitude);
-              map.fitBounds(
-                [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-                { padding: 110, duration: 1000 }
-              );
+            } else {
+              highwayProgress = easeOut(t);
+              currentKm = totalKm * highwayProgress;
             }
 
-            // Once journey ends, open all detail cards across the screen!
-            activePopupRef.current = null;
-            setTimeout(() => {
+            // Update route line
+            updateRouteCoords(coordsForKm(currentKm));
+
+            // Keep close zoom while inside Port / DO / Gate checkpoints, then smoothly zoom out
+            if (hasPortCheckpoints && t <= 0.35) {
+              const portFrac = t / 0.35;
+              const gateMarker = sorted.find(m => m.id === 'checkpoint-gate');
+              const targetLng = gateMarker ? startLng + (gateMarker.longitude - startLng) * portFrac : startLng;
+              const targetLat = gateMarker ? startLat + (gateMarker.latitude - startLat) * portFrac : startLat;
+              if (isFinite(targetLng) && isFinite(targetLat)) {
+                map.jumpTo({ center: [targetLng, targetLat], zoom: startZoom - 0.4 * portFrac });
+              }
+            } else {
+              const camProgress = Math.min(1, Math.pow(highwayProgress, 0.85));
+              const curLng = startLng + (endLng - startLng) * camProgress;
+              const curLat = startLat + (endLat - startLat) * camProgress;
+              const curZoom = (startZoom - 0.4) + (endZoom - (startZoom - 0.4)) * camProgress;
+              if (isFinite(curLng) && isFinite(curLat) && isFinite(curZoom)) {
+                map.jumpTo({ center: [curLng, curLat], zoom: curZoom });
+              }
+            }
+
+            // Reveal markers whose position has been passed + briefly focus on Toll / Gate checkpoints
+            for (const marker of sorted) {
+              const dist = marker.routeDistanceKm ?? 0;
+              if (dist <= currentKm && !revealedRef.current.has(marker.id)) {
+                // Skip markers with invalid coordinates
+                if (!isFinite(marker.longitude) || !isFinite(marker.latitude)) {
+                  revealedRef.current.add(marker.id);
+                  continue;
+                }
+                revealedRef.current.add(marker.id);
+                addMarker(G, map, marker, true, false);
+                onMarkerRevealed(marker.id);
+
+                if (marker.id.startsWith('checkpoint-') || marker.id.startsWith('toll-')) {
+                  map.easeTo({
+                    center: [marker.longitude, marker.latitude],
+                    zoom: marker.id.startsWith('toll-') ? Math.max(endZoom + 1.4, 12.2) : 14.0,
+                    duration: 450,
+                  });
+                }
+              }
+            }
+
+            if (t < 1) {
+              rafRef.current = requestAnimationFrame(frame);
+            } else {
+              // Done — ensure all markers visible + settle bounds
+              setAnimBanner(false);
+              hasCompletedAnimRef.current = true;
+
               markers.forEach(m => {
-                if (m.chargeItems.length > 0) {
-                  const entry = markerEls.current.get(m.id);
-                  if (entry) {
-                    try {
-                      (entry.popup as { addTo: (m: unknown) => void }).addTo(map);
-                    } catch { /* noop */ }
-                  }
+                if (!revealedRef.current.has(m.id)) {
+                  addMarker(G, map, m, false, false);
+                  revealedRef.current.add(m.id);
                 }
               });
-            }, 300);
+              if (hasRouteBounds) {
+                map.fitBounds(
+                  [[minLng, minLat], [maxLng, maxLat]],
+                  { padding: 110, duration: 400 }
+                );
+              }
 
-            onAnimationComplete();
-          }
-        };
+              // Once journey ends, open all detail cards across the screen!
+              activePopupRef.current = null;
+              setTimeout(() => {
+                if (cancelled) return;
+                markers.forEach(m => {
+                  if (m.chargeItems.length > 0) {
+                    const entry = markerEls.current.get(m.id);
+                    if (entry) {
+                      try {
+                        (entry.popup as { addTo: (m: unknown) => void }).addTo(map);
+                      } catch { /* noop */ }
+                    }
+                  }
+                });
+              }, 300);
 
-        rafRef.current = requestAnimationFrame(frame);
+              onAnimationComplete();
+            }
+          };
+
+          rafRef.current = requestAnimationFrame(frame);
+        }, 950);
       });
     };
 
     if (map.isStyleLoaded()) startAnim(); else map.once('styledata', startAnim);
 
     return () => {
+      cancelled = true;
+      if (introTimer) clearTimeout(introTimer);
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       setAnimBanner(false);
     };

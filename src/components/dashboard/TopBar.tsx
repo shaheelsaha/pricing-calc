@@ -2,12 +2,23 @@
 'use client';
 
 import { ArrowLeftRight, Calculator, Ship, Plane, Truck } from 'lucide-react';
-import { TransportMode, ContainerType, VehicleType } from '@/types';
+import { TransportMode, ShipmentFlow, ContainerType, VehicleType } from '@/types';
 import { UAE_LOCATIONS, CONTAINER_TYPES, VEHICLE_TYPES } from '@/constants/locations';
+
+export const SHIPMENT_FLOWS: { value: ShipmentFlow; label: string }[] = [
+  { value: 'all', label: 'All / General' },
+  { value: 'import_row_local', label: 'Import ROW → Local' },
+  { value: 'import_fz_local', label: 'Import FZ → Local' },
+  { value: 'fz_transit_in', label: 'FZ Transit IN' },
+  { value: 'fz_transit_out', label: 'FZ Transit OUT' },
+  { value: 'export_local_row', label: 'Export Local → ROW' },
+];
 
 interface TopBarProps {
   mode: TransportMode;
   onModeChange: (m: TransportMode) => void;
+  shipmentFlow: ShipmentFlow;
+  onShipmentFlowChange: (f: ShipmentFlow) => void;
   originId: string;
   destinationId: string;
   onOriginChange: (id: string) => void;
@@ -28,6 +39,7 @@ const MODES: { id: TransportMode; label: string; icon: React.ComponentType<{ siz
 
 export default function TopBar({
   mode, onModeChange,
+  shipmentFlow, onShipmentFlowChange,
   originId, destinationId,
   onOriginChange, onDestinationChange,
   containerType, vehicleType,
@@ -184,6 +196,20 @@ export default function TopBar({
               <option>Oversized</option>
             </select>
           )}
+        </div>
+
+        {/* Shipment Type */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <label style={{ fontSize: 11, color: '#64748b', fontWeight: 500 }}>Shipment Type</label>
+          <select
+            value={shipmentFlow}
+            onChange={(e) => onShipmentFlowChange(e.target.value as ShipmentFlow)}
+            style={{ ...selectStyle, minWidth: 165 }}
+          >
+            {SHIPMENT_FLOWS.map(sf => (
+              <option key={sf.value} value={sf.value}>{sf.label}</option>
+            ))}
+          </select>
         </div>
 
         {/* Calculate */}

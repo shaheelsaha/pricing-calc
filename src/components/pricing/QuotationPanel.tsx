@@ -46,6 +46,9 @@ interface QuotationPanelProps {
   margin: number;
   highlightedItemId: string | null;
   onItemClick: (id: string) => void;
+  disabledIds?: Set<string>;
+  onToggleItem?: (id: string) => void;
+  onAmountChange?: (id: string, amount: number) => void;
   onSave: () => void;
   onExportPDF: () => void;
   warnings: string[];
@@ -67,6 +70,7 @@ export default function QuotationPanel({
   markup, markupType, onMarkupChange, onMarkupTypeChange,
   totalCost, sellingPrice, margin,
   highlightedItemId, onItemClick,
+  disabledIds, onToggleItem, onAmountChange,
   onSave, onExportPDF,
   warnings, hasCalculated,
   isAnimating = false,
@@ -190,6 +194,7 @@ export default function QuotationPanel({
               <div style={{ marginBottom: 12 }}>
                 {items.map((item, idx) => {
                   const isHighlighted = item.id === highlightedItemId;
+                  const isDisabled = disabledIds?.has(item.id) ?? false;
                   const accentColor = CATEGORY_COLORS[item.chargeCategory] || '#64748b';
                   const isLatest = idx === items.length - 1 && isAnimating;
                   return (
@@ -201,6 +206,7 @@ export default function QuotationPanel({
                         justifyContent: 'space-between',
                         padding: '7px 8px', marginBottom: 3, borderRadius: 7,
                         cursor: 'pointer',
+                        opacity: isDisabled ? 0.45 : 1,
                         backgroundColor: isHighlighted
                           ? '#eff6ff'
                           : isLatest ? '#fafafa' : 'transparent',
@@ -213,15 +219,26 @@ export default function QuotationPanel({
                         animation: 'slideInRow 0.35s ease both',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        {onToggleItem && (
+                          <input
+                            type="checkbox"
+                            checked={!isDisabled}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => onToggleItem(item.id)}
+                            title={isDisabled ? 'Include in total' : 'Exclude from total'}
+                            style={{ cursor: 'pointer', flexShrink: 0 }}
+                          />
+                        )}
                         <span style={{ fontSize: 15, flexShrink: 0 }}>
                           {CATEGORY_ICONS[item.chargeCategory] || '💼'}
                         </span>
                         <div style={{ minWidth: 0 }}>
                           <div style={{
                             fontSize: 12, color: '#1e293b',
+                            textDecoration: isDisabled ? 'line-through' : 'none',
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                            maxWidth: 160,
+                            maxWidth: 138,
                           }}>
                             {item.chargeName}
                           </div>
@@ -238,11 +255,38 @@ export default function QuotationPanel({
                         </div>
                       </div>
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>
-                          {item.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                        </div>
+                        {item.isAtActual ? (
+                          onAmountChange ? (
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder="Actual"
+                              value={item.total > 0 ? item.total : ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => onAmountChange(item.id, Number(e.target.value) || 0)}
+                              title="Enter actual AED amount"
+                              style={{
+                                width: 64, height: 24, padding: '0 4px',
+                                border: '1px solid #f59e0b', borderRadius: 4,
+                                fontSize: 11, fontWeight: 700, textAlign: 'right',
+                                backgroundColor: '#fffbeb', color: '#92400e',
+                              }}
+                            />
+                          ) : (
+                            <div style={{
+                              fontSize: 10, fontWeight: 700, color: '#b45309',
+                              backgroundColor: '#fef3c7', padding: '2px 6px', borderRadius: 4,
+                            }}>
+                              AT ACTUALS
+                            </div>
+                          )
+                        ) : (
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#1e293b' }}>
+                            {item.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </div>
+                        )}
                         <div style={{ fontSize: 10, color: '#94a3b8' }}>
-                          {item.unit.replace(/_/g, ' ')}
+                          {item.isAtActual && item.total === 0 ? 'at actuals' : item.unit.replace(/_/g, ' ')}
                         </div>
                       </div>
                     </div>

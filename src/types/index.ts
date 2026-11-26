@@ -2,6 +2,13 @@
 // Central type definitions for the UAE Freight Pricing System
 
 export type TransportMode = 'land' | 'sea' | 'air';
+export type ShipmentFlow =
+  | 'all'
+  | 'import_row_local'
+  | 'import_fz_local'
+  | 'fz_transit_in'
+  | 'fz_transit_out'
+  | 'export_local_row';
 export type ContainerType = '20ft' | '40ft' | '40ft_hc' | 'reefer' | 'lcl' | 'other';
 export type VehicleType = 'pickup' | '3ton' | '7ton' | '10ton' | '20ton' | 'trailer' | 'lowbed';
 export type ChargeCategory = 'terminal' | 'port' | 'customs' | 'gate_pass' | 'trucking' | 'toll' | 'delivery' | 'storage' | 'documentation' | 'handling' | 'other';
@@ -28,9 +35,11 @@ export interface Rate {
   chargeName: string;
   chargeCategory: ChargeCategory;
   mode: TransportMode;
+  shipmentFlow?: ShipmentFlow;
   originLocationId?: string;
   destinationLocationId?: string;
   amount: number;
+  isAtActual?: boolean;
   currency: string;
   unit: PricingBasis;
   vehicleType?: VehicleType;
@@ -75,6 +84,7 @@ export interface QuotationItem {
   isOverride?: boolean;
   overrideNote?: string;
   isExternalFreight?: boolean;
+  isAtActual?: boolean;
   source: 'rate_master' | 'manual' | 'external' | 'route_rate';
 }
 

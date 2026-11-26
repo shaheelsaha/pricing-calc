@@ -2,12 +2,13 @@
 // Deterministic pricing engine — no AI, no guessing
 
 import Decimal from 'decimal.js';
-import { Rate, QuotationItem, Location, TransportMode, ContainerType, VehicleType, ChargeCategory, MarkerColor } from '@/types';
+import { Rate, QuotationItem, Location, TransportMode, ShipmentFlow, ContainerType, VehicleType, ChargeCategory, MarkerColor } from '@/types';
 
 Decimal.set({ precision: 10, rounding: Decimal.ROUND_HALF_UP });
 
 export interface PricingInput {
   mode: TransportMode;
+  shipmentFlow?: ShipmentFlow;
   originLocationId: string;
   destinationLocationId: string;
   containerType?: ContainerType;
@@ -73,18 +74,40 @@ export function calculatePricing(
   const missingRates: string[] = [];
   const usedCategories = new Set<string>();
 
-  // Filter applicable rates
-  const applicable = rates.filter(
-    (r) =>
-      r.mode === input.mode &&
-      isRateValid(r) &&
-      matchesRoute(r, input) &&
-      matchesVehicle(r, input)
-  );
+  // Filter applicable rates (include local land trucking/toll leg for sea/air shipments)
+  const applicable = rates.filter((r) => {
+    if (!isRateValid(r)) return false;
+
+    const flowMatch =
+      !r.shipmentFlow ||
+      r.shipmentFlow === 'all' ||
+      !input.shipmentFlow ||
+      input.shipmentFlow === 'all' ||
+      r.shipmentFlow === input.shipmentFlow;
+
+    if (r.mode === input.mode) {
+      return flowMatch && matchesRoute(r, input) && matchesVehicle(r, input);
+    }
+
+    // For sea/air, also include route-specific land trucking & road tolls
+    if (input.mode !== 'land' && r.mode === 'land') {
+      if (r.chargeCategory === 'trucking') {
+        const exactRoute =
+          r.originLocationId === input.originLocationId &&
+          r.destinationLocationId === input.destinationLocationId;
+        return exactRoute && (!r.vehicleType || r.vehicleType === input.vehicleType);
+      }
+      if (r.chargeCategory === 'toll') {
+        return matchesRoute(r, input) && (!r.vehicleType || r.vehicleType === input.vehicleType);
+      }
+    }
+
+    return false;
+  });
 
   for (const rate of applicable) {
-    // Prevent duplicate charge categories unless it's explicitly a different route
-    const dedupKey = `${rate.chargeCategory}-${rate.originLocationId || ''}-${rate.destinationLocationId || ''}`;
+    // Prevent duplicate charge entries unless it's a different charge name or route
+    const dedupKey = `${rate.chargeCategory}-${rate.chargeName.trim().toLowerCase()}-${rate.originLocationId || ''}-${rate.destinationLocationId || ''}`;
     if (usedCategories.has(dedupKey)) {
       warnings.push(`Duplicate rate skipped: ${rate.chargeName}`);
       continue;
@@ -110,6 +133,7 @@ export function calculatePricing(
       locationId: location?.locationId,
       locationName: location?.name,
       markerColor: markerColorForCategory(rate.chargeCategory),
+      isAtActual: rate.isAtActual,
       source: 'rate_master',
     });
   }

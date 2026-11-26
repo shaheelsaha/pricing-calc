@@ -1,19 +1,20 @@
 // src/app/page.tsx
 'use client';
 
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Sidebar, { NavItem } from '@/components/layout/Sidebar';
 import TopBar from '@/components/dashboard/TopBar';
 import QuotationPanel from '@/components/pricing/QuotationPanel';
+import RateManagement from '@/components/rate-management/RateManagement';
 import {
-  TransportMode, ContainerType, VehicleType,
+  TransportMode, ShipmentFlow, ContainerType, VehicleType,
   Location, MapMarker, QuotationItem, RouteInfo,
 } from '@/types';
-import { UAE_LOCATIONS } from '@/constants/locations';
+import { UAE_LOCATIONS, JEBEL_ALI_CHECKPOINTS } from '@/constants/locations';
 import { getRoute } from '@/lib/mapbox/directions';
 import { calculatePricing, applyMarkup } from '@/lib/pricing/engine';
-import { DEMO_RATES } from '@/lib/pricing/demo-rates';
+import { getRates, getSheetConfig, syncRatesFromGoogleSheet } from '@/lib/rates/store';
 
 const FreightMap = dynamic(() => import('@/components/map/FreightMap'), {
   ssr: false,
@@ -84,6 +85,7 @@ function kmsAlongRoute(
 /* ─── New Quotation view ─────────────────────────────────────────────────── */
 function NewQuotationView() {
   const [mode, setMode]                       = useState<TransportMode>('land');
+  const [shipmentFlow, setShipmentFlow]       = useState<ShipmentFlow>('all');
   const [originId, setOriginId]               = useState('jebel-ali-port');
   const [destinationId, setDestinationId]     = useState('sharjah-city');
   const [containerType, setContainerType]     = useState<ContainerType>('40ft');
@@ -105,6 +107,8 @@ function NewQuotationView() {
   const [highlightedId, setHighlightedId]     = useState<string | null>(null);
   const [isAnimating, setIsAnimating]         = useState(false);
   const [animComplete, setAnimComplete]       = useState(false);
+  const [disabledIds, setDisabledIds]         = useState<Set<string>>(new Set());
+  const [amountOverrides, setAmountOverrides] = useState<Record<string, number>>({});
 
   // Map marker → its items (for panel reveal sync)
   const markerItemsRef = useRef<Map<string, QuotationItem[]>>(new Map());
@@ -127,22 +131,94 @@ function NewQuotationView() {
     const map = new Map<string, MapMarker>();
     const markerItems = new Map<string, QuotationItem[]>();
 
-    // Charge items at origin
+    // Charge items at origin (trucking & delivery go to destination pin)
     const originItems = items.filter(
       i => (i.locationId === origin.locationId || !i.locationId) &&
            i.chargeCategory !== 'delivery' &&
+           i.chargeCategory !== 'trucking' &&
            i.chargeCategory !== 'toll'
     );
 
-    // Origin
-    map.set('origin', {
-      id: 'origin', locationId: origin.locationId,
-      locationName: `${origin.name}\n(Origin)`,
-      longitude: origin.longitude, latitude: origin.latitude,
-      color: 'orange', chargeItems: originItems, isOrigin: true,
-      routeDistanceKm: 0,
-    });
-    markerItems.set('origin', originItems);
+    if (origin.locationId === 'jebel-ali-port') {
+      const terminalItems = originItems.filter(i =>
+        i.chargeCategory === 'terminal' || i.chargeCategory === 'handling'
+      );
+      const doItems = originItems.filter(i =>
+        i.chargeCategory === 'customs' || i.chargeCategory === 'documentation' ||
+        (i.chargeCategory === 'port' && i.chargeName.toLowerCase().includes('do'))
+      );
+      const tokenItems = originItems.filter(i =>
+        i.chargeCategory === 'port' && !i.chargeName.toLowerCase().includes('do')
+      );
+      const gateItems = originItems.filter(i =>
+        i.chargeCategory === 'gate_pass' || i.chargeCategory === 'trucking' || i.chargeCategory === 'storage' || i.chargeCategory === 'other'
+      );
+
+      map.set('origin', {
+        id: 'origin',
+        locationId: origin.locationId,
+        locationName: JEBEL_ALI_CHECKPOINTS.terminal.name,
+        longitude: JEBEL_ALI_CHECKPOINTS.terminal.longitude,
+        latitude: JEBEL_ALI_CHECKPOINTS.terminal.latitude,
+        color: 'orange',
+        chargeItems: terminalItems,
+        isOrigin: true,
+        routeDistanceKm: 0,
+      });
+      markerItems.set('origin', terminalItems);
+
+      if (doItems.length > 0) {
+        map.set(JEBEL_ALI_CHECKPOINTS.doOffice.id, {
+          id: JEBEL_ALI_CHECKPOINTS.doOffice.id,
+          locationId: origin.locationId,
+          locationName: JEBEL_ALI_CHECKPOINTS.doOffice.name,
+          longitude: JEBEL_ALI_CHECKPOINTS.doOffice.longitude,
+          latitude: JEBEL_ALI_CHECKPOINTS.doOffice.latitude,
+          color: 'blue',
+          chargeItems: doItems,
+          routeDistanceKm: Math.min(0.3, totalKm * 0.03),
+        });
+        markerItems.set(JEBEL_ALI_CHECKPOINTS.doOffice.id, doItems);
+      }
+
+      if (tokenItems.length > 0) {
+        map.set(JEBEL_ALI_CHECKPOINTS.tokenGate.id, {
+          id: JEBEL_ALI_CHECKPOINTS.tokenGate.id,
+          locationId: origin.locationId,
+          locationName: JEBEL_ALI_CHECKPOINTS.tokenGate.name,
+          longitude: JEBEL_ALI_CHECKPOINTS.tokenGate.longitude,
+          latitude: JEBEL_ALI_CHECKPOINTS.tokenGate.latitude,
+          color: 'orange',
+          chargeItems: tokenItems,
+          routeDistanceKm: Math.min(0.8, totalKm * 0.06),
+        });
+        markerItems.set(JEBEL_ALI_CHECKPOINTS.tokenGate.id, tokenItems);
+      }
+
+      if (gateItems.length > 0) {
+        map.set(JEBEL_ALI_CHECKPOINTS.gate.id, {
+          id: JEBEL_ALI_CHECKPOINTS.gate.id,
+          locationId: origin.locationId,
+          locationName: JEBEL_ALI_CHECKPOINTS.gate.name,
+          longitude: JEBEL_ALI_CHECKPOINTS.gate.longitude,
+          latitude: JEBEL_ALI_CHECKPOINTS.gate.latitude,
+          color: 'green',
+          chargeItems: gateItems,
+          routeDistanceKm: Math.min(2.0, totalKm * 0.12),
+        });
+        markerItems.set(JEBEL_ALI_CHECKPOINTS.gate.id, gateItems);
+      }
+    } else {
+      // Origin
+      map.set('origin', {
+        id: 'origin', locationId: origin.locationId,
+        locationName: `${origin.name}\n(Origin)`,
+        longitude: origin.longitude, latitude: origin.latitude,
+        color: 'orange', chargeItems: originItems, isOrigin: true,
+        routeDistanceKm: 0,
+      });
+      markerItems.set('origin', originItems);
+    }
 
     // Intermediate charge markers (not origin, not delivery, not toll)
     for (const item of items) {
@@ -210,7 +286,7 @@ function NewQuotationView() {
 
       const id = `toll-${idx}`;
       map.set(id, {
-        id, locationName: item.locationName || `Toll Gate ${idx + 1}`,
+        id, locationName: `Salik / Road Toll${tollItems.length > 1 ? ` ${idx + 1}` : ''}`,
         longitude: lng, latitude: lat,
         color: 'purple', chargeItems: [item],
         routeDistanceKm: km,
@@ -218,8 +294,8 @@ function NewQuotationView() {
       markerItems.set(id, [item]);
     });
 
-    // Destination (always last)
-    const destItems = items.filter(i => i.chargeCategory === 'delivery');
+    // Destination (always last — includes trucking & delivery)
+    const destItems = items.filter(i => i.chargeCategory === 'delivery' || i.chargeCategory === 'trucking');
     map.set('destination', {
       id: 'destination', locationId: destination.locationId,
       locationName: `${destination.name}\n(Delivery)`,
@@ -239,24 +315,67 @@ function NewQuotationView() {
     return arr;
   }, [locations]);
 
+  /* ─ Auto-sync Google Sheets on app startup ─ */
+  useEffect(() => {
+    const cfg = getSheetConfig();
+    if (cfg.url && cfg.autoSync) {
+      syncRatesFromGoogleSheet(cfg.url).catch(() => {
+        // Keep last saved localStorage rates if offline or unreachable
+      });
+    }
+  }, []);
+
   /* ─ Calculate ─ */
   const handleCalculate = useCallback(async () => {
     if (!originLocation || !destinationLocation) return;
     setIsCalculating(true);
     setHasCalculated(false);
     setAnimComplete(false);
+    setDisabledIds(new Set());
+    setAmountOverrides({});
     setMarkers([]); setAllItems([]); setRevealedItems([]);
     setRoute(null); setWarnings([]); setHighlightedId(null);
 
     try {
-      const routeInfo = await getRoute(
-        [originLocation.longitude, originLocation.latitude],
+      const isJebelAliOrigin = originId === 'jebel-ali-port';
+      // Start Mapbox driving route on the eastbound highway ramp just outside Exit Gate
+      // so Mapbox doesn't U-turn on internal one-way port roads
+      const routeStart: [number, number] = isJebelAliOrigin
+        ? [55.0915, 25.0110]
+        : [originLocation.longitude, originLocation.latitude];
+      const rawRouteInfo = await getRoute(
+        routeStart,
         [destinationLocation.longitude, destinationLocation.latitude],
       );
+      const routeInfo: RouteInfo | null = rawRouteInfo && isJebelAliOrigin
+        ? {
+            ...rawRouteInfo,
+            geometry: {
+              ...rawRouteInfo.geometry,
+              coordinates: [
+                [JEBEL_ALI_CHECKPOINTS.terminal.longitude, JEBEL_ALI_CHECKPOINTS.terminal.latitude],
+                [JEBEL_ALI_CHECKPOINTS.tokenGate.longitude, JEBEL_ALI_CHECKPOINTS.tokenGate.latitude],
+                [55.069486, 24.9924],
+                [55.070418, 24.993307],
+                [55.073603, 24.995984],
+                [55.076673, 24.998644],
+                [55.079914, 25.00163],
+                [55.081511, 25.003086],
+                [55.082029, 25.003356],
+                [55.08243, 25.003647],
+                [55.083338, 25.004654],
+                [55.086471, 25.00737],
+                [55.089543, 25.010031],
+                [55.090975, 25.011392],
+                ...rawRouteInfo.geometry.coordinates,
+              ],
+            },
+          }
+        : rawRouteInfo;
       setRoute(routeInfo);
 
-      const result = calculatePricing(DEMO_RATES, locations, {
-        mode, originLocationId: originId, destinationLocationId: destinationId,
+      const result = calculatePricing(getRates(), locations, {
+        mode, shipmentFlow, originLocationId: originId, destinationLocationId: destinationId,
         containerType, vehicleType,
         externalFreightAmount: externalFreight,
         externalFreightCarrier: externalCarrier,
@@ -281,7 +400,7 @@ function NewQuotationView() {
       setIsCalculating(false);
     }
   }, [
-    originLocation, destinationLocation, mode, originId, destinationId,
+    originLocation, destinationLocation, mode, shipmentFlow, originId, destinationId,
     containerType, vehicleType, externalFreight, externalCarrier,
     locations, buildMarkers,
   ]);
@@ -340,14 +459,40 @@ function NewQuotationView() {
     setRoute(null); setWarnings([]); setIsAnimating(false);
   };
 
-  // Totals shown in panel (from revealed items during animation)
-  const panelTotal = revealedItems.reduce((s, i) => s + i.total, 0);
-  const { sellingPrice: panelSP } = applyMarkup(panelTotal, markup, markupType);
+  const effectiveRevealedItems = useMemo(
+    () =>
+      revealedItems.map(item =>
+        amountOverrides[item.id] !== undefined
+          ? { ...item, amount: amountOverrides[item.id], total: amountOverrides[item.id] * item.quantity }
+          : item,
+      ),
+    [revealedItems, amountOverrides],
+  );
+
+  // Totals shown in panel (excluding unchecked items)
+  const panelTotal = effectiveRevealedItems
+    .filter(i => !disabledIds.has(i.id))
+    .reduce((s, i) => s + i.total, 0);
+  const { sellingPrice: panelSP, margin: panelMargin } = applyMarkup(panelTotal, markup, markupType);
+
+  const handleToggleItem = useCallback((id: string) => {
+    setDisabledIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleAmountChange = useCallback((id: string, amount: number) => {
+    setAmountOverrides(prev => ({ ...prev, [id]: amount }));
+  }, []);
 
   return (
     <>
       <TopBar
         mode={mode} onModeChange={handleModeChange}
+        shipmentFlow={shipmentFlow} onShipmentFlowChange={setShipmentFlow}
         originId={originId} destinationId={destinationId}
         onOriginChange={setOriginId} onDestinationChange={setDestinationId}
         containerType={containerType} vehicleType={vehicleType}
@@ -375,7 +520,7 @@ function NewQuotationView() {
           containerType={containerType}
           vehicleType={vehicleType}
           route={route}
-          items={revealedItems}
+          items={effectiveRevealedItems}
           allItemsCount={allItems.length}
           externalFreight={externalFreight}
           externalCarrier={externalCarrier}
@@ -386,10 +531,13 @@ function NewQuotationView() {
           onMarkupChange={handleMarkupChange}
           onMarkupTypeChange={handleMarkupTypeChange}
           totalCost={panelTotal}
-          sellingPrice={animComplete ? sellingPrice : panelSP}
-          margin={margin}
+          sellingPrice={panelSP}
+          margin={panelMargin}
           highlightedItemId={highlightedId}
           onItemClick={handleItemClick}
+          disabledIds={disabledIds}
+          onToggleItem={handleToggleItem}
+          onAmountChange={handleAmountChange}
           onSave={() => alert('💾 Firebase not configured.\n\nAdd Firebase credentials to .env.local to enable saving.')}
           onExportPDF={() => alert('📄 PDF export will be built in Phase 5.')}
           warnings={warnings}
@@ -409,7 +557,7 @@ export default function HomePage() {
   const content: Record<NavItem, React.ReactNode> = {
     'new-quotation':   <NewQuotationView />,
     quotations:        <PlaceholderPage title="Quotations"      icon="📋" phase="Phase 3" description="View, search and manage all saved quotations. Send to customers and track their status." />,
-    'rate-management': <PlaceholderPage title="Rate Management" icon="📊" phase="Phase 3" description="Import and manage your company rate master from Excel. Set terminal, trucking, toll and delivery rates by route." />,
+    'rate-management': <RateManagement />,
     locations:         <PlaceholderPage title="Locations"       icon="📍" phase="Phase 3" description="Manage UAE ports, airports, free zones and delivery addresses." />,
     reports:           <PlaceholderPage title="Reports"         icon="📈" phase="Phase 5" description="Pricing reports, quotation history, revenue and margin tracking." />,
     settings:          <PlaceholderPage title="Settings"        icon="⚙️" phase="Phase 5" description="Configure company profile, markup, currency, PDF branding and user accounts." />,

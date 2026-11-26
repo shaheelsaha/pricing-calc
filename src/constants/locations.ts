@@ -10,9 +10,9 @@ export const UAE_LOCATIONS: Omit<Location, 'createdAt' | 'updatedAt'>[] = [
     name: 'Jebel Ali Port',
     locationType: 'port',
     emirate: 'Dubai',
-    latitude: 24.9857,
-    longitude: 55.0272,
-    address: 'Jebel Ali, Dubai, UAE',
+    latitude: 24.990417,
+    longitude: 55.062694,
+    address: 'Jebel Ali Terminal 1, Dubai, UAE',
     active: true,
   },
   {
@@ -119,6 +119,36 @@ export const UAE_LOCATIONS: Omit<Location, 'createdAt' | 'updatedAt'>[] = [
     address: 'Dubai Industrial City, Dubai, UAE',
     active: true,
   },
+  {
+    locationId: 'dafza',
+    name: 'DAFZA (Dubai Airport Free Zone)',
+    locationType: 'free_zone',
+    emirate: 'Dubai',
+    latitude: 25.2614,
+    longitude: 55.3742,
+    address: 'Dubai Airport Free Zone, Dubai, UAE',
+    active: true,
+  },
+  {
+    locationId: 'saif-zone',
+    name: 'Sharjah SAIF Zone',
+    locationType: 'free_zone',
+    emirate: 'Sharjah',
+    latitude: 25.3282,
+    longitude: 55.4978,
+    address: 'Sharjah Airport International Free Zone, Sharjah, UAE',
+    active: true,
+  },
+  {
+    locationId: 'hamriyah-free-zone',
+    name: 'Hamriyah Free Zone (Sharjah)',
+    locationType: 'free_zone',
+    emirate: 'Sharjah',
+    latitude: 25.4694,
+    longitude: 55.5022,
+    address: 'Hamriyah Free Zone, Sharjah, UAE',
+    active: true,
+  },
 
   // === INDUSTRIAL / CITY AREAS ===
   {
@@ -221,6 +251,36 @@ export const UAE_LOCATIONS: Omit<Location, 'createdAt' | 'updatedAt'>[] = [
     address: 'Dubai, UAE',
     active: true,
   },
+  {
+    locationId: 'umm-al-quwain',
+    name: 'Umm Al Quwain',
+    locationType: 'city',
+    emirate: 'Umm Al Quwain',
+    latitude: 25.5647,
+    longitude: 55.5552,
+    address: 'Umm Al Quwain, UAE',
+    active: true,
+  },
+  {
+    locationId: 'al-ain',
+    name: 'Al Ain',
+    locationType: 'city',
+    emirate: 'Abu Dhabi',
+    latitude: 24.2075,
+    longitude: 55.7447,
+    address: 'Al Ain, Abu Dhabi, UAE',
+    active: true,
+  },
+  {
+    locationId: 'khor-khwair-port',
+    name: 'Ras Al Khaimah (Khor Khwair Port)',
+    locationType: 'port',
+    emirate: 'Ras Al Khaimah',
+    latitude: 25.9597,
+    longitude: 56.0467,
+    address: 'Saqr Port / Khor Khwair, Ras Al Khaimah, UAE',
+    active: true,
+  },
 ];
 
 // UAE map bounds for initial viewport
@@ -253,3 +313,31 @@ export const VEHICLE_TYPES = [
   { value: 'trailer', label: "Trailer / Semi-Truck" },
   { value: 'lowbed', label: "Low Bed Trailer" },
 ] as const;
+
+// Real GPS checkpoints for Jebel Ali Port (from user coordinates)
+export const JEBEL_ALI_CHECKPOINTS = {
+  terminal: {
+    id: 'checkpoint-terminal',
+    name: 'Jebel Ali Terminal (THC / Port)',
+    longitude: 55.062694, // 55°03'45.7"E
+    latitude: 24.990417,  // 24°59'25.5"N
+  },
+  doOffice: {
+    id: 'checkpoint-do',
+    name: 'DO & Customs Office',
+    longitude: 55.060028, // 55°03'36.1"E
+    latitude: 24.992944,  // 24°59'34.6"N
+  },
+  tokenGate: {
+    id: 'checkpoint-token',
+    name: 'Port Token Gate',
+    longitude: 55.069139, // 55°04'08.9"E
+    latitude: 24.992389,  // 24°59'32.6"N
+  },
+  gate: {
+    id: 'checkpoint-gate',
+    name: 'Jebel Ali Exit Gate (Gate Pass)',
+    longitude: 55.086444, // 55°05'11.2"E
+    latitude: 25.007472,  // 25°00'26.9"N
+  },
+} as const;
